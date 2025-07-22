@@ -360,6 +360,16 @@ class ObservationManager(ManagerBase):
 
         # concatenate all observations in the group together
         if self._group_obs_concatenate[group_name]:
+            # Print observation slices
+            # start = 0
+            # print(f"===== Observation slices for group: {group_name} =====")
+            # for key, val in group_obs.items():
+            #     dim = val.shape[-1]
+            #     end = start + dim
+            #     print(f"{key}: [{start}, {end}] (dim = {dim})")
+            #     start = end
+            # print("======================================================")
+            
             # set the concatenate dimension, account for the batch dimension if positive dimension is given
             return torch.cat(list(group_obs.values()), dim=self._group_obs_concatenate_dim[group_name])
         else:

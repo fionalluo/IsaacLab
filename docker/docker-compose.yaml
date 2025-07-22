@@ -64,6 +64,16 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
   - type: bind
     source: .isaac-lab-docker-history
     target: ${DOCKER_USER_HOME}/.bash_history
+    # Add some extra folders
+  - type: bind
+    source: /home/harsh/fiona/sensor-dropout
+    target: /workspace/sensor-dropout
+  - type: bind
+    source: /home/harsh/fiona/trailenv
+    target: /workspace/trailenv
+  - type: bind
+    source: /home/harsh/fiona/Gymnasium-Robotics
+    target: /workspace/Gymnasium-Robotics
 
 x-default-isaac-lab-environment: &default-isaac-lab-environment
   - ISAACSIM_PATH=${DOCKER_ISAACLAB_PATH}/_isaac_sim
