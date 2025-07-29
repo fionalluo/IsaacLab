@@ -74,6 +74,9 @@ x-default-isaac-lab-volumes: &default-isaac-lab-volumes
   - type: bind
     source: /home/harsh/fiona/Gymnasium-Robotics
     target: /workspace/Gymnasium-Robotics
+  - type: bind
+    source: /home/harsh/fiona/rl_games
+    target: /workspace/rl_games
 
 x-default-isaac-lab-environment: &default-isaac-lab-environment
   - ISAACSIM_PATH=${DOCKER_ISAACLAB_PATH}/_isaac_sim

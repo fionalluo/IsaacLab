@@ -14,6 +14,7 @@ from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sensors import ContactSensorCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
@@ -225,6 +226,41 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     av_factor = 0.1
     act_moving_average = 1.0
     force_torque_obs_scale = 10.0
+
+
+@configclass
+class ShadowHandWithContactSensorsEnvCfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with contact sensors on every joint/body."""
+    
+    # Update observation space to account for contact sensor data
+    # The original observation space is 157, we'll add space for contact forces
+    # We'll estimate the number of bodies that can have contact sensors
+    # Shadow Hand typically has around 20-25 bodies, each with 3D force data
+    # observation_space = 157 + 75
+    observation_space = 235  # Actual observation space size with contact forces
+    state_space = 0  # Don't use asymmetric observations for now
+    asymmetric_obs = False  # Ensure we don't use asymmetric observations
+    
+    # Override robot_cfg to enable contact sensors
+    robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=SHADOW_HAND_CFG.spawn.replace(activate_contact_sensors=True)
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={".*": 0.0},
+        )
+    )
+    
+    # Contact sensors for all bodies in the Shadow Hand
+    # We'll add contact sensors for all the bodies in the Shadow Hand
+    contact_sensors = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
+        update_period=0.0,  # Update every physics step
+        history_length=6,
+        debug_vis=True,
+    )
 
 
 @configclass

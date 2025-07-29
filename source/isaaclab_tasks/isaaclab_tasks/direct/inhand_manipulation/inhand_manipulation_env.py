@@ -87,6 +87,13 @@ class InHandManipulationEnv(DirectRLEnv):
         # add articulation to scene - we must register to scene to randomize with EventManager
         self.scene.articulations["robot"] = self.hand
         self.scene.rigid_objects["object"] = self.object
+        
+        # Add contact sensors if configured
+        if hasattr(self.cfg, 'contact_sensors'):
+            from isaaclab.sensors import ContactSensor
+            self.contact_sensors = ContactSensor(self.cfg.contact_sensors)
+            self.scene.sensors["contact_sensors"] = self.contact_sensors
+        
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
@@ -135,6 +142,19 @@ class InHandManipulationEnv(DirectRLEnv):
         observations = {"policy": obs}
         if self.cfg.asymmetric_obs:
             observations = {"policy": obs, "critic": states}
+            
+        # Add contact sensor data if available
+        if hasattr(self, 'contact_sensors'):
+            contact_data = self.contact_sensors.data
+            # Add contact forces to observations
+            contact_forces = contact_data.net_forces_w.view(self.num_envs, -1)  # Flatten all contact forces
+            
+            # Extend the observation space with contact data
+            if "policy" in observations:
+                observations["policy"] = torch.cat([observations["policy"], contact_forces], dim=-1)
+            if "critic" in observations:
+                observations["critic"] = torch.cat([observations["critic"], contact_forces], dim=-1)
+                
         return observations
 
     def _get_rewards(self) -> torch.Tensor:
