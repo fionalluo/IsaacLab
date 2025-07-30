@@ -143,11 +143,64 @@ class InHandManipulationEnv(DirectRLEnv):
         if self.cfg.asymmetric_obs:
             observations = {"policy": obs, "critic": states}
             
+        # Debug: Print observation space structure occasionally
+        if hasattr(self, '_step_count'):
+            self._step_count += 1
+        else:
+            self._step_count = 0
+            
+        if self._step_count % 100 == 0:  # Print every 100 steps
+            print(f"\n[OBSERVATION DEBUG] Step {self._step_count}:")
+            print(f"[OBSERVATION DEBUG] Observation keys: {list(observations.keys())}")
+            
+            # Analyze the policy observation structure
+            policy_obs = observations["policy"]
+            print(f"[OBSERVATION DEBUG] Policy observation shape: {policy_obs.shape}")
+            
+            # Break down the observation based on obs_type
+            if self.cfg.obs_type == "full":
+                self._debug_full_observation_structure(policy_obs)
+            elif self.cfg.obs_type == "openai":
+                self._debug_openai_observation_structure(policy_obs)
+            
+            if self.cfg.asymmetric_obs and "critic" in observations:
+                critic_obs = observations["critic"]
+                print(f"[OBSERVATION DEBUG] Critic observation shape: {critic_obs.shape}")
+            
         # Add contact sensor data if available
         if hasattr(self, 'contact_sensors'):
             contact_data = self.contact_sensors.data
             # Add contact forces to observations
             contact_forces = contact_data.net_forces_w.view(self.num_envs, -1)  # Flatten all contact forces
+            
+            # Debug: Print detailed contact force information occasionally
+            if self._step_count % 100 == 0:  # Print every 100 steps
+                max_force = torch.max(contact_forces).item()
+                avg_force = torch.mean(contact_forces).item()
+                print(f"[CONTACT DEBUG] Step {self._step_count}: Max force = {max_force:.4f}, Avg force = {avg_force:.4f}")
+                print(f"[CONTACT DEBUG] Contact forces shape: {contact_forces.shape}")
+                print(f"[CONTACT DEBUG] Number of bodies: {self.contact_sensors.num_bodies}")
+                
+                # Print detailed contact data for environment 0
+                print(f"\n[CONTACT DEBUG] Detailed contact data for environment 0:")
+                print(f"Body names: {self.contact_sensors.body_names}")
+                
+                # Get contact forces for environment 0 (shape: [num_bodies, 3])
+                env0_forces = contact_data.net_forces_w[0]  # Shape: [26, 3]
+                
+                print(f"\n[CONTACT DEBUG] Contact forces for each body (env 0):")
+                for i, body_name in enumerate(self.contact_sensors.body_names):
+                    fx, fy, fz = env0_forces[i].tolist()
+                    force_magnitude = torch.norm(env0_forces[i]).item()
+                    print(f"  {body_name:20s}: Fx={fx:8.4f}, Fy={fy:8.4f}, Fz={fz:8.4f}, |F|={force_magnitude:8.4f}")
+                
+                # Show which bodies have non-zero contact
+                non_zero_bodies = []
+                for i, body_name in enumerate(self.contact_sensors.body_names):
+                    if torch.norm(env0_forces[i]) > 0.001:  # Threshold for non-zero contact
+                        non_zero_bodies.append(body_name)
+                
+                print(f"\n[CONTACT DEBUG] Bodies with non-zero contact (env 0): {non_zero_bodies}")
             
             # Extend the observation space with contact data
             if "policy" in observations:
@@ -156,6 +209,111 @@ class InHandManipulationEnv(DirectRLEnv):
                 observations["critic"] = torch.cat([observations["critic"], contact_forces], dim=-1)
                 
         return observations
+
+    def _debug_full_observation_structure(self, obs):
+        """Debug the full observation structure."""
+        print(f"[OBSERVATION DEBUG] Full observation breakdown:")
+        
+        # Based on compute_full_observations() method
+        start_idx = 0
+        
+        # Hand joint positions (scaled)
+        joint_pos_size = self.num_hand_dofs
+        print(f"  [{start_idx:3d}:{start_idx+joint_pos_size:3d}] Hand joint positions (scaled): {joint_pos_size} dims")
+        start_idx += joint_pos_size
+        
+        # Hand joint velocities
+        joint_vel_size = self.num_hand_dofs
+        print(f"  [{start_idx:3d}:{start_idx+joint_vel_size:3d}] Hand joint velocities: {joint_vel_size} dims")
+        start_idx += joint_vel_size
+        
+        # Object position
+        obj_pos_size = 3
+        print(f"  [{start_idx:3d}:{start_idx+obj_pos_size:3d}] Object position: {obj_pos_size} dims")
+        start_idx += obj_pos_size
+        
+        # Object rotation (quaternion)
+        obj_rot_size = 4
+        print(f"  [{start_idx:3d}:{start_idx+obj_rot_size:3d}] Object rotation: {obj_rot_size} dims")
+        start_idx += obj_rot_size
+        
+        # Object linear velocity
+        obj_linvel_size = 3
+        print(f"  [{start_idx:3d}:{start_idx+obj_linvel_size:3d}] Object linear velocity: {obj_linvel_size} dims")
+        start_idx += obj_linvel_size
+        
+        # Object angular velocity
+        obj_angvel_size = 3
+        print(f"  [{start_idx:3d}:{start_idx+obj_angvel_size:3d}] Object angular velocity: {obj_angvel_size} dims")
+        start_idx += obj_angvel_size
+        
+        # Goal position (in-hand)
+        goal_pos_size = 3
+        print(f"  [{start_idx:3d}:{start_idx+goal_pos_size:3d}] Goal position: {goal_pos_size} dims")
+        start_idx += goal_pos_size
+        
+        # Goal rotation
+        goal_rot_size = 4
+        print(f"  [{start_idx:3d}:{start_idx+goal_rot_size:3d}] Goal rotation: {goal_rot_size} dims")
+        start_idx += goal_rot_size
+        
+        # Relative object-goal rotation
+        rel_rot_size = 4
+        print(f"  [{start_idx:3d}:{start_idx+rel_rot_size:3d}] Relative object-goal rotation: {rel_rot_size} dims")
+        start_idx += rel_rot_size
+        
+        # Fingertip positions
+        fingertip_pos_size = self.num_fingertips * 3
+        print(f"  [{start_idx:3d}:{start_idx+fingertip_pos_size:3d}] Fingertip positions: {fingertip_pos_size} dims")
+        start_idx += fingertip_pos_size
+        
+        # Fingertip rotations
+        fingertip_rot_size = self.num_fingertips * 4
+        print(f"  [{start_idx:3d}:{start_idx+fingertip_rot_size:3d}] Fingertip rotations: {fingertip_rot_size} dims")
+        start_idx += fingertip_rot_size
+        
+        # Fingertip velocities
+        fingertip_vel_size = self.num_fingertips * 6
+        print(f"  [{start_idx:3d}:{start_idx+fingertip_vel_size:3d}] Fingertip velocities: {fingertip_vel_size} dims")
+        start_idx += fingertip_vel_size
+        
+        # Actions
+        action_size = self.cfg.action_space
+        print(f"  [{start_idx:3d}:{start_idx+action_size:3d}] Actions: {action_size} dims")
+        start_idx += action_size
+        
+        print(f"[OBSERVATION DEBUG] Total base observation size: {start_idx}")
+        print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + self.contact_sensors.num_bodies * 3}")
+
+    def _debug_openai_observation_structure(self, obs):
+        """Debug the OpenAI observation structure."""
+        print(f"[OBSERVATION DEBUG] OpenAI observation breakdown:")
+        
+        # Based on compute_reduced_observations() method
+        start_idx = 0
+        
+        # Fingertip positions
+        fingertip_pos_size = self.num_fingertips * 3
+        print(f"  [{start_idx:3d}:{start_idx+fingertip_pos_size:3d}] Fingertip positions: {fingertip_pos_size} dims")
+        start_idx += fingertip_pos_size
+        
+        # Object position
+        obj_pos_size = 3
+        print(f"  [{start_idx:3d}:{start_idx+obj_pos_size:3d}] Object position: {obj_pos_size} dims")
+        start_idx += obj_pos_size
+        
+        # Relative object-goal rotation
+        rel_rot_size = 4
+        print(f"  [{start_idx:3d}:{start_idx+rel_rot_size:3d}] Relative object-goal rotation: {rel_rot_size} dims")
+        start_idx += rel_rot_size
+        
+        # Actions
+        action_size = self.cfg.action_space
+        print(f"  [{start_idx:3d}:{start_idx+action_size:3d}] Actions: {action_size} dims")
+        start_idx += action_size
+        
+        print(f"[OBSERVATION DEBUG] Total base observation size: {start_idx}")
+        print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + self.contact_sensors.num_bodies * 3}")
 
     def _get_rewards(self) -> torch.Tensor:
         (
@@ -195,6 +353,18 @@ class InHandManipulationEnv(DirectRLEnv):
             self._reset_target_pose(goal_env_ids)
 
         return total_reward
+
+    def get_contact_info(self):
+        """Get detailed contact information for debugging or analysis."""
+        if not hasattr(self, 'contact_sensors'):
+            return None
+        
+        contact_data = self.contact_sensors.data
+        return {
+            'net_forces': contact_data.net_forces_w,
+            'body_names': self.contact_sensors.body_names,
+            'num_bodies': self.contact_sensors.num_bodies,
+        }
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         self._compute_intermediate_values()
