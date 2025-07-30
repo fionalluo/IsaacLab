@@ -170,8 +170,28 @@ class InHandManipulationEnv(DirectRLEnv):
         # Add contact sensor data if available
         if hasattr(self, 'contact_sensors'):
             contact_data = self.contact_sensors.data
-            # Add contact forces to observations
-            contact_forces = contact_data.net_forces_w.view(self.num_envs, -1)  # Flatten all contact forces
+            # Get raw contact forces (shape: [num_envs, num_bodies, 3])
+            raw_contact_forces = contact_data.net_forces_w  # Shape: [8192, 26, 3]
+            
+            # Process contact data based on configuration type
+            if hasattr(self.cfg, 'contact_sensors'):
+                # Determine the type of contact sensor processing based on config class name
+                config_class_name = self.cfg.__class__.__name__
+                
+                if "Binary" in config_class_name:
+                    # Binary contact sensors: 0 or 1 for any contact
+                    contact_magnitudes = torch.norm(raw_contact_forces, dim=-1)  # Shape: [8192, 26]
+                    binary_contacts = (contact_magnitudes > 0.001).float()  # Threshold for contact detection
+                    contact_forces = binary_contacts.view(self.num_envs, -1)  # Shape: [8192, 26]
+                    
+                elif "Magnitude" in config_class_name:
+                    # Magnitude-only contact sensors: √(Fx² + Fy² + Fz²)
+                    contact_magnitudes = torch.norm(raw_contact_forces, dim=-1)  # Shape: [8192, 26]
+                    contact_forces = contact_magnitudes.view(self.num_envs, -1)  # Shape: [8192, 26]
+                    
+                else:
+                    # Full 3D contact sensors: (Fx, Fy, Fz) for each body
+                    contact_forces = raw_contact_forces.view(self.num_envs, -1)  # Shape: [8192, 78]
             
             # Debug: Print detailed contact force information occasionally
             if self._step_count % 100 == 0:  # Print every 100 steps
@@ -180,31 +200,46 @@ class InHandManipulationEnv(DirectRLEnv):
                 print(f"[CONTACT DEBUG] Step {self._step_count}: Max force = {max_force:.4f}, Avg force = {avg_force:.4f}")
                 print(f"[CONTACT DEBUG] Contact forces shape: {contact_forces.shape}")
                 print(f"[CONTACT DEBUG] Number of bodies: {self.contact_sensors.num_bodies}")
+                print(f"[CONTACT DEBUG] Contact sensor type: {config_class_name}")
                 
                 # Print detailed contact data for environment 0
                 print(f"\n[CONTACT DEBUG] Detailed contact data for environment 0:")
                 print(f"Body names: {self.contact_sensors.body_names}")
                 
-                # Get contact forces for environment 0 (shape: [num_bodies, 3])
-                env0_forces = contact_data.net_forces_w[0]  # Shape: [26, 3]
+                # Get contact forces for environment 0
+                env0_forces = contact_forces[0]  # Shape depends on type
                 
                 print(f"\n[CONTACT DEBUG] Contact forces for each body (env 0):")
                 for i, body_name in enumerate(self.contact_sensors.body_names):
-                    fx, fy, fz = env0_forces[i].tolist()
-                    force_magnitude = torch.norm(env0_forces[i]).item()
-                    print(f"  {body_name:20s}: Fx={fx:8.4f}, Fy={fy:8.4f}, Fz={fz:8.4f}, |F|={force_magnitude:8.4f}")
+                    if "Binary" in config_class_name:
+                        contact_val = env0_forces[i].item()
+                        print(f"  {body_name:20s}: Binary contact = {contact_val:.0f}")
+                    elif "Magnitude" in config_class_name:
+                        magnitude = env0_forces[i].item()
+                        print(f"  {body_name:20s}: Magnitude = {magnitude:8.4f}")
+                    else:
+                        # Full 3D forces
+                        fx, fy, fz = raw_contact_forces[0, i].tolist()
+                        force_magnitude = torch.norm(raw_contact_forces[0, i]).item()
+                        print(f"  {body_name:20s}: Fx={fx:8.4f}, Fy={fy:8.4f}, Fz={fz:8.4f}, |F|={force_magnitude:8.4f}")
                 
                 # Show which bodies have non-zero contact
-                non_zero_bodies = []
-                for i, body_name in enumerate(self.contact_sensors.body_names):
-                    if torch.norm(env0_forces[i]) > 0.001:  # Threshold for non-zero contact
-                        non_zero_bodies.append(body_name)
+                if "Binary" in config_class_name:
+                    non_zero_bodies = [self.contact_sensors.body_names[i] for i in range(len(self.contact_sensors.body_names)) if env0_forces[i] > 0.5]
+                elif "Magnitude" in config_class_name:
+                    non_zero_bodies = [self.contact_sensors.body_names[i] for i in range(len(self.contact_sensors.body_names)) if env0_forces[i] > 0.001]
+                else:
+                    non_zero_bodies = [self.contact_sensors.body_names[i] for i in range(len(self.contact_sensors.body_names)) if torch.norm(raw_contact_forces[0, i]) > 0.001]
                 
                 print(f"\n[CONTACT DEBUG] Bodies with non-zero contact (env 0): {non_zero_bodies}")
             
             # Extend the observation space with contact data
             if "policy" in observations:
+                # print(f"[OBSERVATION DEBUG] Adding contact forces to policy observation")
+                # print(f"[OBSERVATION DEBUG] Original policy obs shape: {observations['policy'].shape}")
+                # print(f"[OBSERVATION DEBUG] Contact forces shape: {contact_forces.shape}")
                 observations["policy"] = torch.cat([observations["policy"], contact_forces], dim=-1)
+                # print(f"[OBSERVATION DEBUG] Final policy obs shape: {observations['policy'].shape}")
             if "critic" in observations:
                 observations["critic"] = torch.cat([observations["critic"], contact_forces], dim=-1)
                 

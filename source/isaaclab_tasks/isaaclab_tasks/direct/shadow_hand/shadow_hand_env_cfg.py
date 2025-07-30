@@ -236,7 +236,6 @@ class ShadowHandWithContactSensorsEnvCfg(ShadowHandEnvCfg):
     # The original observation space is 157, we'll add space for contact forces
     # We'll estimate the number of bodies that can have contact sensors
     # Shadow Hand typically has around 20-25 bodies, each with 3D force data
-    # observation_space = 157 + 75
     observation_space = 235  # Actual observation space size with contact forces
     state_space = 0  # Don't use asymmetric observations for now
     asymmetric_obs = False  # Ensure we don't use asymmetric observations
@@ -255,6 +254,68 @@ class ShadowHandWithContactSensorsEnvCfg(ShadowHandEnvCfg):
     
     # Contact sensors for all bodies in the Shadow Hand
     # We'll add contact sensors for all the bodies in the Shadow Hand
+    contact_sensors = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
+        update_period=0.0,  # Update every physics step
+        history_length=6,
+        debug_vis=True,
+    )
+
+
+@configclass
+class ShadowHandWithBinaryContactSensorsEnvCfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with binary contact sensors (0/1 for any contact)."""
+    
+    # Update observation space to account for binary contact sensor data
+    # Original observation space is 157, we'll add 26 binary values (one per body)
+    observation_space = 157 + 26  # Original + binary contact sensors (26 bodies)
+    state_space = 0  # Don't use asymmetric observations for now
+    asymmetric_obs = False  # Ensure we don't use asymmetric observations
+    
+    # Override robot_cfg to enable contact sensors
+    robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=SHADOW_HAND_CFG.spawn.replace(activate_contact_sensors=True)
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={".*": 0.0},
+        )
+    )
+    
+    # Contact sensors for all bodies in the Shadow Hand
+    contact_sensors = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
+        update_period=0.0,  # Update every physics step
+        history_length=6,
+        debug_vis=True,
+    )
+
+
+@configclass
+class ShadowHandWithMagnitudeContactSensorsEnvCfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with magnitude-only contact sensors (√(Fx² + Fy² + Fz²))."""
+    
+    # Update observation space to account for magnitude contact sensor data
+    # Original observation space is 157, we'll add 26 magnitude values (one per body)
+    observation_space = 157 + 26  # Original + magnitude contact sensors (26 bodies)
+    state_space = 0  # Don't use asymmetric observations for now
+    asymmetric_obs = False  # Ensure we don't use asymmetric observations
+    
+    # Override robot_cfg to enable contact sensors
+    robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=SHADOW_HAND_CFG.spawn.replace(activate_contact_sensors=True)
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={".*": 0.0},
+        )
+    )
+    
+    # Contact sensors for all bodies in the Shadow Hand
     contact_sensors = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
         update_period=0.0,  # Update every physics step
