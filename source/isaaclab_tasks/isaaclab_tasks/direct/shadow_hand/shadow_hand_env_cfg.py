@@ -138,6 +138,7 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
             bounce_threshold_velocity=0.2,
         ),
     )
+    
     # robot
     robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(prim_path="/World/envs/env_.*/Robot").replace(
         init_state=ArticulationCfg.InitialStateCfg(

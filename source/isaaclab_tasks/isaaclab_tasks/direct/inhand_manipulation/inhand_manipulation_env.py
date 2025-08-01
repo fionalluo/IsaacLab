@@ -70,6 +70,11 @@ class InHandManipulationEnv(DirectRLEnv):
         # track successes
         self.successes = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.consecutive_successes = torch.zeros(1, dtype=torch.float, device=self.device)
+        
+        # batched evaluation for success rate logging
+        self.success_eval_count = 0
+        self.success_eval_interval = 100  # Log success rate every 100 episodes
+        self.success_eval_batch = []
 
         # unit tensors
         self.x_unit_tensor = torch.tensor([1, 0, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
@@ -318,7 +323,13 @@ class InHandManipulationEnv(DirectRLEnv):
         start_idx += action_size
         
         print(f"[OBSERVATION DEBUG] Total base observation size: {start_idx}")
-        print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + self.contact_sensors.num_bodies * 3}")
+        
+        # Only mention contact sensors if they exist
+        if hasattr(self, 'contact_sensors'):
+            contact_size = self.contact_sensors.num_bodies * 3
+            print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + contact_size}")
+        else:
+            print(f"[OBSERVATION DEBUG] No contact sensors configured")
 
     def _debug_openai_observation_structure(self, obs):
         """Debug the OpenAI observation structure."""
@@ -348,7 +359,13 @@ class InHandManipulationEnv(DirectRLEnv):
         start_idx += action_size
         
         print(f"[OBSERVATION DEBUG] Total base observation size: {start_idx}")
-        print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + self.contact_sensors.num_bodies * 3}")
+        
+        # Only mention contact sensors if they exist
+        if hasattr(self, 'contact_sensors'):
+            contact_size = self.contact_sensors.num_bodies * 3
+            print(f"[OBSERVATION DEBUG] Expected total with contact sensors: {start_idx + contact_size}")
+        else:
+            print(f"[OBSERVATION DEBUG] No contact sensors configured")
 
     def _get_rewards(self) -> torch.Tensor:
         (
@@ -381,6 +398,34 @@ class InHandManipulationEnv(DirectRLEnv):
         if "log" not in self.extras:
             self.extras["log"] = dict()
         self.extras["log"]["consecutive_successes"] = self.consecutive_successes.mean()
+        
+        # Batched evaluation for success rate - only log every success_eval_interval episodes
+        if torch.any(self.reset_buf):
+            # Count how many episodes ended this step
+            num_episodes_ended = torch.sum(self.reset_buf).item()
+            self.success_eval_count += num_episodes_ended
+            
+            # Collect success data for environments that just reset
+            if num_episodes_ended > 0:
+                reset_env_ids = torch.nonzero(self.reset_buf).squeeze(-1)
+                if len(reset_env_ids.shape) == 0:  # Single environment
+                    reset_env_ids = reset_env_ids.unsqueeze(0)
+                
+                for env_id in reset_env_ids:
+                    # Check if this episode ended with success (successes > 0 means at least one success occurred)
+                    episode_success = 1.0 if self.successes[env_id].item() > 0 else 0.0
+                    self.success_eval_batch.append(episode_success)
+            
+            # Log success rate when we reach evaluation interval
+            if self.success_eval_count >= self.success_eval_interval:
+                if len(self.success_eval_batch) > 0:
+                    # Calculate percentage of successful episodes (0.0 to 1.0)
+                    success_rate = sum(self.success_eval_batch) / len(self.success_eval_batch)
+                    self.extras["log"]["success_rate"] = success_rate
+                    
+                    # Reset evaluation batch
+                    self.success_eval_count = 0
+                    self.success_eval_batch = []
 
         # reset goals if the goal has been reached
         goal_env_ids = self.reset_goal_buf.nonzero(as_tuple=False).squeeze(-1)
