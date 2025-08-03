@@ -16,11 +16,35 @@ from ..shadow_hand import agents
 ##
 
 gym.register(
-    id="Isaac-Spin-Cube-Shadow-With-Contact-Sensors-Direct-v0",
+    id="Isaac-Spin-Cube-Shadow-With-Object-State-v0",
     entry_point=f"{__name__}.shadow_hand_spin_env:ShadowHandSpinEnv",
     disable_env_checker=True,
     kwargs={
-        "env_cfg_entry_point": f"{__name__}.shadow_hand_spin_cfg:IsaacSpinCubeShadowWithContactSensorsDirectV0Cfg",
+        "env_cfg_entry_point": f"{__name__}.shadow_hand_spin_cfg:IsaacSpinCubeShadowWithObjectStateV0Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ShadowHandPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Spin-Cube-Shadow-v0",
+    entry_point=f"{__name__}.shadow_hand_spin_env:ShadowHandSpinEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.shadow_hand_spin_cfg:IsaacSpinCubeShadowV0Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ShadowHandPPORunnerCfg",
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="Isaac-Spin-Cube-Shadow-No-Contact-Sensors-v0",
+    entry_point=f"{__name__}.shadow_hand_spin_env:ShadowHandSpinEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.shadow_hand_spin_cfg:IsaacSpinCubeShadowNoContactSensorsV0Cfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
         "rsl_rl_cfg_entry_point": f"{agents.__name__}.rsl_rl_ppo_cfg:ShadowHandPPORunnerCfg",
         "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",

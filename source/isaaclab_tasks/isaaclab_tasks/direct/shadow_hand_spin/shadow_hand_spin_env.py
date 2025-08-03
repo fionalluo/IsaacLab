@@ -21,12 +21,17 @@ from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, 
 if TYPE_CHECKING:
     from isaaclab_tasks.direct.allegro_hand.allegro_hand_env_cfg import AllegroHandEnvCfg
     from isaaclab_tasks.direct.shadow_hand.shadow_hand_env_cfg import ShadowHandEnvCfg
+    from isaaclab_tasks.direct.shadow_hand_spin.shadow_hand_spin_cfg import (
+        IsaacSpinCubeShadowWithObjectStateV0Cfg,
+        IsaacSpinCubeShadowV0Cfg,
+        IsaacSpinCubeShadowNoContactSensorsV0Cfg,
+    )
 
 
 class ShadowHandSpinEnv(DirectRLEnv):
-    cfg: AllegroHandEnvCfg | ShadowHandEnvCfg
+    cfg: AllegroHandEnvCfg | ShadowHandEnvCfg | IsaacSpinCubeShadowWithObjectStateV0Cfg | IsaacSpinCubeShadowV0Cfg | IsaacSpinCubeShadowNoContactSensorsV0Cfg
 
-    def __init__(self, cfg: AllegroHandEnvCfg | ShadowHandEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: AllegroHandEnvCfg | ShadowHandEnvCfg | IsaacSpinCubeShadowWithObjectStateV0Cfg | IsaacSpinCubeShadowV0Cfg | IsaacSpinCubeShadowNoContactSensorsV0Cfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.num_hand_dofs = self.hand.num_joints
@@ -176,7 +181,7 @@ class ShadowHandSpinEnv(DirectRLEnv):
                 critic_obs = observations["critic"]
                 print(f"[OBSERVATION DEBUG] Critic observation shape: {critic_obs.shape}")
             
-        # Add contact sensor data if available
+        # Add contact sensor data if available and configured for observations
         if hasattr(self, 'contact_sensors'):
             contact_data = self.contact_sensors.data
             # Get raw contact forces (shape: [num_envs, num_bodies, 3])
@@ -242,15 +247,17 @@ class ShadowHandSpinEnv(DirectRLEnv):
                 
                 print(f"\n[CONTACT DEBUG] Bodies with non-zero contact (env 0): {non_zero_bodies}")
             
-            # Extend the observation space with contact data
-            if "policy" in observations:
-                # print(f"[OBSERVATION DEBUG] Adding contact forces to policy observation")
-                # print(f"[OBSERVATION DEBUG] Original policy obs shape: {observations['policy'].shape}")
-                # print(f"[OBSERVATION DEBUG] Contact forces shape: {contact_forces.shape}")
-                observations["policy"] = torch.cat([observations["policy"], contact_forces], dim=-1)
-                # print(f"[OBSERVATION DEBUG] Final policy obs shape: {observations['policy'].shape}")
-            if "critic" in observations:
-                observations["critic"] = torch.cat([observations["critic"], contact_forces], dim=-1)
+            # Only add contact data to observations if not the "NoContactSensors" config
+            if "NoContactSensors" not in config_class_name:
+                # Extend the observation space with contact data
+                if "policy" in observations:
+                    # print(f"[OBSERVATION DEBUG] Adding contact forces to policy observation")
+                    # print(f"[OBSERVATION DEBUG] Original policy obs shape: {observations['policy'].shape}")
+                    # print(f"[OBSERVATION DEBUG] Contact forces shape: {contact_forces.shape}")
+                    observations["policy"] = torch.cat([observations["policy"], contact_forces], dim=-1)
+                    # print(f"[OBSERVATION DEBUG] Final policy obs shape: {observations['policy'].shape}")
+                if "critic" in observations:
+                    observations["critic"] = torch.cat([observations["critic"], contact_forces], dim=-1)
                 
         return observations
 
@@ -582,25 +589,38 @@ class ShadowHandSpinEnv(DirectRLEnv):
         return obs
 
     def compute_full_observations(self):
-        obs = torch.cat(
-            (
-                # hand
-                unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
-                self.cfg.vel_obs_scale * self.hand_dof_vel,
+        """Compute full observations based on configuration."""
+        config_class_name = self.cfg.__class__.__name__
+        
+        # Start with hand observations (always included)
+        obs_components = [
+            # hand
+            unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
+            self.cfg.vel_obs_scale * self.hand_dof_vel,
+        ]
+        
+        # Add object state if configured
+        if "WithObjectState" in config_class_name:
+            obs_components.extend([
                 # object
                 self.object_pos,
                 self.object_rot,
                 self.object_linvel,
                 self.cfg.vel_obs_scale * self.object_angvel,
-                # fingertips
-                self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
-                self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4),
-                self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6),
-                # actions
-                self.actions,
-            ),
-            dim=-1,
-        )
+            ])
+        
+        # Add fingertip observations (always included)
+        obs_components.extend([
+            # fingertips
+            self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
+            self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4),
+            self.fingertip_velocities.view(self.num_envs, self.num_fingertips * 6),
+        ])
+        
+        # Add actions (always included)
+        obs_components.append(self.actions)
+        
+        obs = torch.cat(obs_components, dim=-1)
         return obs
 
     def compute_full_state(self):

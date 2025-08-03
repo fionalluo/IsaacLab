@@ -224,10 +224,10 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
 
 
 @configclass
-class IsaacSpinCubeShadowWithContactSensorsDirectV0Cfg(ShadowHandEnvCfg):
-    """Shadow Hand environment with contact sensors on every joint/body."""
+class IsaacSpinCubeShadowWithObjectStateV0Cfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with contact sensors on every joint/body and object state in observations."""
     
-    # Update observation space to account for contact sensor data
+    # Update observation space to account for contact sensor data and object state
     # The original observation space is 157, we'll subtract 11 for goal removal and add space for contact forces
     # Shadow Hand typically has around 20-25 bodies, each with 3D force data
     observation_space = 224  # 157 - 11 + contact forces
@@ -248,6 +248,70 @@ class IsaacSpinCubeShadowWithContactSensorsDirectV0Cfg(ShadowHandEnvCfg):
     
     # Contact sensors for all bodies in the Shadow Hand
     # We'll add contact sensors for all the bodies in the Shadow Hand
+    contact_sensors = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
+        update_period=0.0,  # Update every physics step
+        history_length=6,
+        debug_vis=True,
+    )
+
+
+@configclass
+class IsaacSpinCubeShadowV0Cfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with contact sensors on every joint/body but no object state in observations."""
+    
+    # Update observation space to account for contact sensor data but no object state
+    # The original observation space is 157, we'll subtract 11 for goal removal and subtract 13 for object state removal
+    # Shadow Hand typically has around 20-25 bodies, each with 3D force data
+    observation_space = 211  # 157 - 11 - 13 + contact forces
+    state_space = 0  # Don't use asymmetric observations for now
+    asymmetric_obs = False  # Ensure we don't use asymmetric observations
+    
+    # Override robot_cfg to enable contact sensors
+    robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=SHADOW_HAND_CFG.spawn.replace(activate_contact_sensors=True)
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={".*": 0.0},
+        )
+    )
+    
+    # Contact sensors for all bodies in the Shadow Hand
+    # We'll add contact sensors for all the bodies in the Shadow Hand
+    contact_sensors = ContactSensorCfg(
+        prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
+        update_period=0.0,  # Update every physics step
+        history_length=6,
+        debug_vis=True,
+    ) 
+
+
+@configclass
+class IsaacSpinCubeShadowNoContactSensorsV0Cfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with no contact sensors and no object state in observations."""
+    
+    # Update observation space to account for no contact sensor data and no object state
+    # The original observation space is 157, we'll subtract 11 for goal removal, subtract 13 for object state removal, and subtract 78 for contact sensors
+    observation_space = 133  # 157 - 11 - 13 - 78
+    state_space = 0  # Don't use asymmetric observations for now
+    asymmetric_obs = False  # Ensure we don't use asymmetric observations
+    
+    # Use robot_cfg with contact sensors (for reward computation) but exclude from observations
+    robot_cfg: ArticulationCfg = SHADOW_HAND_CFG.replace(
+        prim_path="/World/envs/env_.*/Robot",
+        spawn=SHADOW_HAND_CFG.spawn.replace(activate_contact_sensors=True)
+    ).replace(
+        init_state=ArticulationCfg.InitialStateCfg(
+            pos=(0.0, 0.0, 0.5),
+            rot=(1.0, 0.0, 0.0, 0.0),
+            joint_pos={".*": 0.0},
+        )
+    )
+    
+    # Contact sensors are configured but excluded from observations
     contact_sensors = ContactSensorCfg(
         prim_path="/World/envs/env_.*/Robot/.*",  # Monitor all bodies in the robot
         update_period=0.0,  # Update every physics step
