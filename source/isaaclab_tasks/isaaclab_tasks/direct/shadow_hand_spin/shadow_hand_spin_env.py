@@ -356,6 +356,32 @@ class ShadowHandSpinEnv(DirectRLEnv):
             print(f"[OBSERVATION DEBUG] No contact sensors configured")
 
     def _get_rewards(self) -> torch.Tensor:
+        # Get contact forces if available
+        if hasattr(self, 'contact_sensors'):
+            contact_data = self.contact_sensors.data
+            raw_contact_forces = contact_data.net_forces_w  # Shape: [8192, 26, 3]
+            
+            # Process contact data based on configuration type
+            config_class_name = self.cfg.__class__.__name__
+            
+            if "Binary" in config_class_name:
+                # Binary contact sensors: 0 or 1 for any contact
+                contact_magnitudes = torch.norm(raw_contact_forces, dim=-1)  # Shape: [8192, 26]
+                binary_contacts = (contact_magnitudes > 0.001).float()  # Threshold for contact detection
+                contact_forces = binary_contacts.view(self.num_envs, -1)  # Shape: [8192, 26]
+                
+            elif "Magnitude" in config_class_name:
+                # Magnitude-only contact sensors: √(Fx² + Fy² + Fz²)
+                contact_magnitudes = torch.norm(raw_contact_forces, dim=-1)  # Shape: [8192, 26]
+                contact_forces = contact_magnitudes.view(self.num_envs, -1)  # Shape: [8192, 26]
+                
+            else:
+                # Full 3D contact sensors: (Fx, Fy, Fz) for each body
+                contact_forces = raw_contact_forces.view(self.num_envs, -1)  # Shape: [8192, 78]
+        else:
+            # No contact sensors - create dummy tensor with all zeros
+            contact_forces = torch.zeros((self.num_envs, 1), device=self.device)
+        
         (
             total_reward,
             rotation_delta,
@@ -371,9 +397,14 @@ class ShadowHandSpinEnv(DirectRLEnv):
             self.object_rot,
             self.object_pos,
             self.in_hand_pos,
+            self.object_linvel,
+            self.fingertip_pos,
             self.actions,
             self.cfg.action_penalty_scale,
             self.cfg.rotation_reward_scale,
+            self.cfg.linear_velocity_penalty_scale,
+            self.cfg.distance_reward_scale,
+            contact_forces,
             # self.cfg.reach_goal_bonus,  # No goal success for spinning
             self.cfg.fall_dist,
             self.cfg.fall_penalty,
@@ -437,21 +468,7 @@ class ShadowHandSpinEnv(DirectRLEnv):
         out_of_reach = goal_dist >= self.cfg.fall_dist
 
         # Check if cube's z-axis has tilted more than 60 degrees from global z-axis
-        # Convert quaternion to rotation matrix and extract z-axis
-        # The z-axis of the cube in world coordinates is the third column of the rotation matrix
-        # For quaternion (w, x, y, z), the z-axis is: (2*(x*y - w*z), 2*(y*z + w*x), 1-2*(x*x + y*y))
-        w, x, y, z = self.object_rot[:, 0], self.object_rot[:, 1], self.object_rot[:, 2], self.object_rot[:, 3]
-        cube_z_axis = torch.stack([
-            2 * (x * y - w * z),
-            2 * (y * z + w * x),
-            1 - 2 * (x * x + y * y)
-        ], dim=-1)
-        
-        # Calculate angle between cube's z-axis and global z-axis (0, 0, 1)
-        global_z = torch.tensor([0.0, 0.0, 1.0], device=self.device).repeat(self.num_envs, 1)
-        cos_angle = torch.sum(cube_z_axis * global_z, dim=-1)
-        cos_angle = torch.clamp(cos_angle, -1.0, 1.0)  # Clamp to avoid numerical issues
-        tilt_angle = torch.acos(cos_angle) * 180.0 / np.pi  # Convert to degrees
+        tilt_angle = compute_tilt_angle(self.object_rot)
         
         # Reset if tilt angle is greater than 60 degrees
         excessive_tilt = tilt_angle > 60.0
@@ -634,8 +651,8 @@ def randomize_z_rotation(rand0, z_unit_tensor):
 
 
 @torch.jit.script
-def compute_clockwise_rotation_reward(prev_rot: torch.Tensor, curr_rot: torch.Tensor, rotation_reward_scale: float):
-    """Compute reward for clockwise rotation around the z-axis."""
+def compute_clockwise_rotation_reward(prev_rot: torch.Tensor, curr_rot: torch.Tensor, rotation_reward_scale: float, contact_forces: torch.Tensor):
+    """Compute reward for clockwise rotation around the z-axis, only when in contact."""
     # Extract the x-axis of the cube in both previous and current rotations
     # For quaternion (w, x, y, z), the x-axis is: (1-2*(y*y + z*z), 2*(x*y + w*z), 2*(x*z - w*y))
     
@@ -678,9 +695,99 @@ def compute_clockwise_rotation_reward(prev_rot: torch.Tensor, curr_rot: torch.Te
     
     # Positive reward for clockwise rotation (negative cross_z), negative for counterclockwise
     # The angle is always positive, so we use the sign of cross_z to determine direction
-    rotation_reward = torch.where(cross_z < 0, angle, -angle) * rotation_reward_scale
+    rotation_delta_true = torch.where(cross_z < 0, angle, -angle)
     
-    return rotation_reward
+    # Clip the rotation delta to not reward excessive spinning
+    rotation_delta = torch.clamp(rotation_delta_true, -0.157, 0.157)
+    
+    # Check if there's any contact between hand and object
+    total_contact_per_env = torch.sum(torch.abs(contact_forces), dim=-1)
+    has_contact = total_contact_per_env > 0.001
+    
+    # Zero out rotation reward if there's no contact
+    rotation_delta = torch.where(has_contact, rotation_delta, torch.zeros_like(rotation_delta))
+    
+    # Apply the reward scale
+    rotation_reward = rotation_delta * rotation_reward_scale
+    
+    # return the true rotation delta, regardless of contact, clipping, etc. 
+    return rotation_reward, rotation_delta_true
+
+
+@torch.jit.script
+def compute_action_penalty(actions: torch.Tensor, action_penalty_scale: float):
+    """Compute action regularization penalty."""
+    action_penalty = torch.sum(actions**2, dim=-1)
+    return action_penalty * action_penalty_scale
+
+
+@torch.jit.script
+def compute_linear_velocity_penalty(object_linvel: torch.Tensor, linear_velocity_penalty_scale: float):
+    """Compute penalty for object linear velocity to prevent tossing."""
+    object_linear_velocity = torch.norm(object_linvel, dim=-1)
+    linear_velocity_penalty = object_linear_velocity * linear_velocity_penalty_scale
+    return linear_velocity_penalty
+
+
+@torch.jit.script
+def compute_distance_reward(fingertip_pos: torch.Tensor, object_pos: torch.Tensor, distance_reward_scale: float):
+    """Compute reward for fingertips staying close to object."""
+    # Calculate distance from each fingertip to object
+    # fingertip_pos shape: [num_envs, num_fingertips, 3]
+    # object_pos shape: [num_envs, 3]
+    # Expand object_pos to match fingertip_pos shape
+    object_pos_expanded = object_pos.unsqueeze(1).expand(-1, fingertip_pos.shape[1], -1)
+    
+    # Calculate distances from each fingertip to object
+    distances = torch.norm(fingertip_pos - object_pos_expanded, dim=-1)  # Shape: [num_envs, num_fingertips]
+    
+    # Apply the distance reward formula: clip(0.1 / (0.02 + 4*distance), 0, 1)
+    distance_rewards = torch.clamp(0.1 / (0.02 + 4.0 * distances), 0.0, 1.0)
+    
+    # Take the mean across all fingertips
+    mean_distance_reward = torch.mean(distance_rewards, dim=-1)  # Shape: [num_envs]
+    
+    # Scale by the distance reward scale
+    distance_reward = mean_distance_reward * distance_reward_scale
+    return distance_reward
+
+
+@torch.jit.script
+def compute_tilt_angle(object_rot: torch.Tensor):
+    """Compute the tilt angle of the object in degrees."""
+    # Extract cube's z-axis from quaternion
+    w, x, y, z = object_rot[:, 0], object_rot[:, 1], object_rot[:, 2], object_rot[:, 3]
+    cube_z_axis = torch.stack([
+        2 * (x * y - w * z),
+        2 * (y * z + w * x),
+        1 - 2 * (x * x + y * y)
+    ], dim=-1)
+    
+    # Calculate angle between cube's z-axis and global z-axis
+    global_z = torch.tensor([0.0, 0.0, 1.0], device=object_rot.device).repeat(object_rot.shape[0], 1)
+    cos_angle = torch.sum(cube_z_axis * global_z, dim=-1)
+    cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
+    tilt_angle = torch.acos(cos_angle) * 180.0 / 3.14159  # Convert to degrees
+    return tilt_angle
+
+
+@torch.jit.script
+def compute_tilt_penalty(object_rot: torch.Tensor, tilt_penalty: float):
+    """Compute penalty for excessive tilt of the object."""
+    tilt_angle = compute_tilt_angle(object_rot)
+    
+    # Apply tilt penalty if angle exceeds 60 degrees
+    tilt_penalty_rew = torch.where(tilt_angle > 60.0, tilt_penalty, 0.0)
+    return tilt_penalty_rew
+
+
+@torch.jit.script
+def compute_fall_penalty(object_pos: torch.Tensor, target_pos: torch.Tensor, fall_dist: float, fall_penalty: float):
+    """Compute penalty when object falls too far from target position."""
+    goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
+    fall_condition = goal_dist >= fall_dist
+    fall_penalty_rew = torch.where(fall_condition, fall_penalty, 0.0)
+    return fall_penalty_rew
 
 
 @torch.jit.script
@@ -701,57 +808,34 @@ def compute_rewards(
     object_rot: torch.Tensor,
     object_pos: torch.Tensor,
     target_pos: torch.Tensor,
+    object_linvel: torch.Tensor,
+    fingertip_pos: torch.Tensor,
     actions: torch.Tensor,
     action_penalty_scale: float,
     rotation_reward_scale: float,
+    linear_velocity_penalty_scale: float,
+    distance_reward_scale: float,
+    contact_forces: torch.Tensor,
     # reach_goal_bonus: float,  # No goal success for spinning
     fall_dist: float,
     fall_penalty: float,
     tilt_penalty: float,
     av_factor: float,
 ):
-
-    # Calculate clockwise rotation reward
-    rotation_rew = compute_clockwise_rotation_reward(prev_object_rot, object_rot, rotation_reward_scale)
+    # Calculate clockwise rotation reward (includes contact checking)
+    rotation_rew, rotation_delta = compute_clockwise_rotation_reward(prev_object_rot, object_rot, rotation_reward_scale, contact_forces)
     
-    # Track total rotations (only positive rotations)
-    rotation_delta = compute_clockwise_rotation_reward(prev_object_rot, object_rot, 1.0)  # Scale of 1.0 to get raw angle
-    positive_rotation_delta = torch.where(rotation_delta > 0, rotation_delta, 0.0)
-    total_rotations = total_rotations + positive_rotation_delta
+    # Track total rotations (both positive and negative, contact checking is done in the function)
+    total_rotations = total_rotations + rotation_delta
     
-    action_penalty = torch.sum(actions**2, dim=-1)
+    # Compute individual reward components
+    action_penalty_rew = compute_action_penalty(actions, action_penalty_scale)
+    linear_velocity_penalty_rew = compute_linear_velocity_penalty(object_linvel, linear_velocity_penalty_scale)
+    distance_reward_rew = compute_distance_reward(fingertip_pos, object_pos, distance_reward_scale)
+    tilt_penalty_rew = compute_tilt_penalty(object_rot, tilt_penalty)
+    fall_penalty_rew = compute_fall_penalty(object_pos, target_pos, fall_dist, fall_penalty)
 
-    # Calculate tilt penalty
-    # Extract cube's z-axis from quaternion
-    w, x, y, z = object_rot[:, 0], object_rot[:, 1], object_rot[:, 2], object_rot[:, 3]
-    cube_z_axis = torch.stack([
-        2 * (x * y - w * z),
-        2 * (y * z + w * x),
-        1 - 2 * (x * x + y * y)
-    ], dim=-1)
-    
-    # Calculate angle between cube's z-axis and global z-axis
-    global_z = torch.tensor([0.0, 0.0, 1.0], device=object_rot.device).repeat(object_rot.shape[0], 1)
-    cos_angle = torch.sum(cube_z_axis * global_z, dim=-1)
-    cos_angle = torch.clamp(cos_angle, -1.0, 1.0)
-    tilt_angle = torch.acos(cos_angle) * 180.0 / np.pi
-    
-    # Apply tilt penalty if angle exceeds 60 degrees
-    tilt_penalty_rew = torch.where(tilt_angle > 60.0, tilt_penalty, 0.0)
+    # Total reward is: clockwise rotation + action regularization + linear velocity penalty + distance reward + fall penalty + tilt penalty
+    reward = rotation_rew + action_penalty_rew + linear_velocity_penalty_rew + distance_reward_rew + fall_penalty_rew + tilt_penalty_rew
 
-    # Total reward is: clockwise rotation + action regularization + success bonus + fall penalty + tilt penalty
-    reward = rotation_rew + action_penalty * action_penalty_scale + tilt_penalty_rew
-
-    # For spinning task, we don't track goal success, just continuous rotation
-    # Fall penalty: distance to the goal is larger than a threshold
-    goal_dist = torch.norm(object_pos - target_pos, p=2, dim=-1)
-    fall_condition = goal_dist >= fall_dist
-    reward = torch.where(fall_condition, reward + fall_penalty, reward)
-
-    # Check env termination conditions
-    resets = torch.where(fall_condition, torch.ones_like(reset_buf), reset_buf)
-
-    # For spinning task, we don't track consecutive successes
-    # cons_successes = consecutive_successes
-
-    return reward, rotation_delta, reset_goal_buf, total_rotations  # , cons_successes 
+    return reward, rotation_delta, reset_goal_buf, total_rotations 

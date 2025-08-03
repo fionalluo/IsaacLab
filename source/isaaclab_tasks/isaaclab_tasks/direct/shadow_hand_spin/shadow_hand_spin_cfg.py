@@ -209,9 +209,11 @@ class ShadowHandEnvCfg(DirectRLEnvCfg):
     rot_eps = 0.1
     action_penalty_scale = -0.0002
     reach_goal_bonus = 250
-    fall_penalty = 0
+    fall_penalty = -50
     tilt_penalty = 0  # Penalty for tilting more than 60 degrees
-    rotation_reward_scale = 100.0  # Scale factor for clockwise rotation reward
+    rotation_reward_scale = 20.0  # Scale factor for clockwise rotation reward
+    linear_velocity_penalty_scale = -0.1  # Scale factor for linear velocity penalty
+    distance_reward_scale = 0.1  # Scale factor for distance reward
     fall_dist = 0.24
     vel_obs_scale = 0.2
     success_tolerance = 0.1
