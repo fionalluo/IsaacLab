@@ -264,6 +264,28 @@ class ShadowHandWithContactSensorsEnvCfg(ShadowHandEnvCfg):
 
 
 @configclass
+class ShadowHandNoObjectStateEnvCfg(ShadowHandEnvCfg):
+    """Shadow Hand environment with initial object state instead of current object state."""
+    
+    # Observation space remains the same as ShadowHandEnvCfg
+    observation_space = 157  # Same as base config
+    state_space = 0
+    asymmetric_obs = False
+    obs_type = "full"
+
+
+@configclass
+class ShadowHandWithContactSensorsNoObjectStateEnvCfg(ShadowHandWithContactSensorsEnvCfg):
+    """Shadow Hand environment with contact sensors and initial object state instead of current object state."""
+    
+    # Observation space remains the same as ShadowHandWithContactSensorsEnvCfg
+    observation_space = 235  # Same as ShadowHandWithContactSensorsEnvCfg
+    state_space = 0
+    asymmetric_obs = False
+    obs_type = "full"
+
+
+@configclass
 class ShadowHandWithBinaryContactSensorsEnvCfg(ShadowHandEnvCfg):
     """Shadow Hand environment with binary contact sensors (0/1 for any contact)."""
     

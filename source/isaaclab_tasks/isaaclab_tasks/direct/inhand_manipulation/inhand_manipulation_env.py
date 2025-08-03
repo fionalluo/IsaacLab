@@ -20,13 +20,17 @@ from isaaclab.utils.math import quat_conjugate, quat_from_angle_axis, quat_mul, 
 
 if TYPE_CHECKING:
     from isaaclab_tasks.direct.allegro_hand.allegro_hand_env_cfg import AllegroHandEnvCfg
-    from isaaclab_tasks.direct.shadow_hand.shadow_hand_env_cfg import ShadowHandEnvCfg
+    from isaaclab_tasks.direct.shadow_hand.shadow_hand_env_cfg import (
+        ShadowHandEnvCfg,
+        ShadowHandNoObjectStateEnvCfg,
+        ShadowHandWithContactSensorsNoObjectStateEnvCfg,
+    )
 
 
 class InHandManipulationEnv(DirectRLEnv):
-    cfg: AllegroHandEnvCfg | ShadowHandEnvCfg
+    cfg: AllegroHandEnvCfg | ShadowHandEnvCfg | ShadowHandNoObjectStateEnvCfg | ShadowHandWithContactSensorsNoObjectStateEnvCfg
 
-    def __init__(self, cfg: AllegroHandEnvCfg | ShadowHandEnvCfg, render_mode: str | None = None, **kwargs):
+    def __init__(self, cfg: AllegroHandEnvCfg | ShadowHandEnvCfg | ShadowHandNoObjectStateEnvCfg | ShadowHandWithContactSensorsNoObjectStateEnvCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
 
         self.num_hand_dofs = self.hand.num_joints
@@ -75,6 +79,12 @@ class InHandManipulationEnv(DirectRLEnv):
         self.success_eval_count = 0
         self.success_eval_interval = 100  # Log success rate every 100 episodes
         self.success_eval_batch = []
+        
+        # Initialize initial object state buffers (for NoObjectState configs)
+        self.init_object_pos = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.init_object_rot = torch.zeros((self.num_envs, 4), dtype=torch.float, device=self.device)
+        self.init_object_linvel = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
+        self.init_object_angvel = torch.zeros((self.num_envs, 3), dtype=torch.float, device=self.device)
 
         # unit tensors
         self.x_unit_tensor = torch.tensor([1, 0, 0], dtype=torch.float, device=self.device).repeat((self.num_envs, 1))
@@ -493,6 +503,15 @@ class InHandManipulationEnv(DirectRLEnv):
         object_default_state[:, 7:] = torch.zeros_like(self.object.data.default_root_state[env_ids, 7:])
         self.object.write_root_pose_to_sim(object_default_state[:, :7], env_ids)
         self.object.write_root_velocity_to_sim(object_default_state[:, 7:], env_ids)
+        
+        # Store initial object state for NoObjectState configs
+        config_class_name = self.cfg.__class__.__name__
+        if "NoObjectState" in config_class_name:
+            # Store the initial object state for the reset environments
+            self.init_object_pos[env_ids] = object_default_state[:, 0:3].clone()
+            self.init_object_rot[env_ids] = object_default_state[:, 3:7].clone()
+            self.init_object_linvel[env_ids] = object_default_state[:, 7:10].clone()
+            self.init_object_angvel[env_ids] = object_default_state[:, 10:13].clone()
 
         # reset hand
         delta_max = self.hand_dof_upper_limits[env_ids] - self.hand.data.default_joint_pos[env_ids]
@@ -547,17 +566,41 @@ class InHandManipulationEnv(DirectRLEnv):
         self.object_velocities = self.object.data.root_vel_w
         self.object_linvel = self.object.data.root_lin_vel_w
         self.object_angvel = self.object.data.root_ang_vel_w
+        
+        # Store initial object state for NoObjectState configs
+        config_class_name = self.cfg.__class__.__name__
+        if "NoObjectState" in config_class_name:
+            # Store the initial object state (this will be set during reset)
+            # For now, we'll use the current state as initial state
+            # This will be properly initialized during the first reset
+            if torch.all(self.init_object_pos == 0):  # If not yet initialized
+                self.init_object_pos = self.object_pos.clone()
+                self.init_object_rot = self.object_rot.clone()
+                self.init_object_linvel = self.object_linvel.clone()
+                self.init_object_angvel = self.object_angvel.clone()
 
     def compute_reduced_observations(self):
         # Per https://arxiv.org/pdf/1808.00177.pdf Table 2
         #   Fingertip positions
         #   Object Position, but not orientation
         #   Relative target orientation
+        config_class_name = self.cfg.__class__.__name__
+        
+        # Choose object state based on configuration
+        if "NoObjectState" in config_class_name:
+            # Use initial object state instead of current
+            object_pos = self.init_object_pos
+            object_rot = self.init_object_rot
+        else:
+            # Use current object state
+            object_pos = self.object_pos
+            object_rot = self.object_rot
+        
         obs = torch.cat(
             (
                 self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
-                self.object_pos,
-                quat_mul(self.object_rot, quat_conjugate(self.goal_rot)),
+                object_pos,
+                quat_mul(object_rot, quat_conjugate(self.goal_rot)),
                 self.actions,
             ),
             dim=-1,
@@ -566,20 +609,36 @@ class InHandManipulationEnv(DirectRLEnv):
         return obs
 
     def compute_full_observations(self):
+        config_class_name = self.cfg.__class__.__name__
+        
+        # Choose object state based on configuration
+        if "NoObjectState" in config_class_name:
+            # Use initial object state instead of current
+            object_pos = self.init_object_pos
+            object_rot = self.init_object_rot
+            object_linvel = self.init_object_linvel
+            object_angvel = self.init_object_angvel
+        else:
+            # Use current object state
+            object_pos = self.object_pos
+            object_rot = self.object_rot
+            object_linvel = self.object_linvel
+            object_angvel = self.object_angvel
+        
         obs = torch.cat(
             (
                 # hand
                 unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
                 self.cfg.vel_obs_scale * self.hand_dof_vel,
                 # object
-                self.object_pos,
-                self.object_rot,
-                self.object_linvel,
-                self.cfg.vel_obs_scale * self.object_angvel,
+                object_pos,
+                object_rot,
+                object_linvel,
+                self.cfg.vel_obs_scale * object_angvel,
                 # goal
                 self.in_hand_pos,
                 self.goal_rot,
-                quat_mul(self.object_rot, quat_conjugate(self.goal_rot)),
+                quat_mul(object_rot, quat_conjugate(self.goal_rot)),
                 # fingertips
                 self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
                 self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4),
@@ -592,20 +651,36 @@ class InHandManipulationEnv(DirectRLEnv):
         return obs
 
     def compute_full_state(self):
+        config_class_name = self.cfg.__class__.__name__
+        
+        # Choose object state based on configuration
+        if "NoObjectState" in config_class_name:
+            # Use initial object state instead of current
+            object_pos = self.init_object_pos
+            object_rot = self.init_object_rot
+            object_linvel = self.init_object_linvel
+            object_angvel = self.init_object_angvel
+        else:
+            # Use current object state
+            object_pos = self.object_pos
+            object_rot = self.object_rot
+            object_linvel = self.object_linvel
+            object_angvel = self.object_angvel
+        
         states = torch.cat(
             (
                 # hand
                 unscale(self.hand_dof_pos, self.hand_dof_lower_limits, self.hand_dof_upper_limits),
                 self.cfg.vel_obs_scale * self.hand_dof_vel,
                 # object
-                self.object_pos,
-                self.object_rot,
-                self.object_linvel,
-                self.cfg.vel_obs_scale * self.object_angvel,
+                object_pos,
+                object_rot,
+                object_linvel,
+                self.cfg.vel_obs_scale * object_angvel,
                 # goal
                 self.in_hand_pos,
                 self.goal_rot,
-                quat_mul(self.object_rot, quat_conjugate(self.goal_rot)),
+                quat_mul(object_rot, quat_conjugate(self.goal_rot)),
                 # fingertips
                 self.fingertip_pos.view(self.num_envs, self.num_fingertips * 3),
                 self.fingertip_rot.view(self.num_envs, self.num_fingertips * 4),
